@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "python-splunk-logging"
+description = "Splunk logging for Python"
+authors = [
+    { name = "Alexander Baker", email = "alebaker@cisco.com" },
+    { name = "Eric Li", email = "erili2@cisco.com"}
+]
+requires-python = ">=3.9"
+readme = "README.md"
+dynamic = ["version", ]
+dependencies = [
+    "httpx>=0.28.1",
+    "python-dateutil>=2.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "respx>=0.22.0",
+    "ruff>=0.12.4",
+    "tox>=4.27.0",
+    "tox-uv>=1.26.1",
+]
+
+[project.urls]
+repository = "https://github.com/splunk/python-splunk-logging"
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+line_length = 120
+profile = "black"
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["test"]
+
+[tool.ruff.lint]
+select = ["F", "E", "N", "A", "C4", "ISC", "PT", "Q", "RET", "SLF", "ARG", "PTH", "RUF"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+
+[tool.tox]
+requires = ["tox>=4"]
+env_list = ["lint", "format", "test"]
+
+[tool.tox.env_run_base]
+dependency_groups = ["dev"]
+
+[tool.tox.env.lint]
+description = "run ruff linter and check formatting"
+skip_install = true
+commands = [["ruff", "check"], ["isort", "--check", "."], ["black", "--check", "."]]
+
+[tool.tox.env.format]
+description = "format python files with black & isort"
+skip_install = true
+commands = [["isort", "."], ["black", "."]]
+
+[tool.tox.env.test]
+description = "run unit tests"
+commands = [["python", "-m", "unittest", "discover", "-s", "test"]]
+
