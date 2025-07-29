@@ -1,0 +1,29 @@
+name: Main
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install deps
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run Linters
+        run: uv tool run tox -e lint
+
+      - name: Run Tests
+        run: uv tool run tox -e test
+
