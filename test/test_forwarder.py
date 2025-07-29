@@ -50,9 +50,9 @@ class TestHecForwarder(unittest.TestCase):
             year=random.randint(2000, 2024),
             month=random.randint(1, 12),
             day=random.randint(1, 28),
-            hour=random.randint(1, 24),
-            minute=random.randint(1, 60),
-            second=random.randint(1, 60),
+            hour=random.randint(1, 23),
+            minute=random.randint(1, 59),
+            second=random.randint(1, 59),
         )
         ts = dt.timestamp()
 
