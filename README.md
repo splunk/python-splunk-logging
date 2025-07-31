@@ -5,8 +5,6 @@ splunk instance using the HTTP Event Collector (HEC).
 
 ## Installation
 
-### Production
-
 ```
 pip install python-splunk-logging
 ```
@@ -184,7 +182,8 @@ logger.info(
 )
 ```
 
-To prevent Splunk logging from slowing down the application, a queue can be used to buffer the log messages. See [Dealing with handlers that block](https://docs.python.org/3/howto/logging-cookbook.html#dealing-with-handlers-that-block) for details.
+To prevent Splunk logging from slowing down the application, a queue can be used to buffer the log messages.
+See [Dealing with handlers that block](https://docs.python.org/3/howto/logging-cookbook.html#dealing-with-handlers-that-block) for details.
 
 ```python
 import logging
