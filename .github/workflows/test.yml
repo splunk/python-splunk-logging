@@ -41,9 +41,6 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
-      # - name: Install deps
-      #   run: uv sync --locked --all-extras --dev
-
       - name: Run Tests
         run: uv tool run tox -e test
 
