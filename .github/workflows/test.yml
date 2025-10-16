@@ -13,11 +13,6 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version:
-          - "3.9"
-          - "3.13"
     steps:
       - uses: actions/checkout@v5
 
@@ -25,10 +20,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      # - name: Install deps
-      #   run: uv sync --locked --all-extras --dev
+          python-version: "3.13"
 
       - name: Run Linters
         run: uv tool run tox -e lint
