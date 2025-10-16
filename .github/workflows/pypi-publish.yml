@@ -28,6 +28,9 @@ jobs:
           enable-cache: true
           python-version: "3.13"
 
+      - name: Install semantic-release
+        run: uv pip install python-semantic-release
+
       - name: Build next version
         run: uv run semantic-release -v version --no-changelog --no-commit --no-tag
 
@@ -40,12 +43,12 @@ jobs:
       - name: Semantic Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Provided by GitHub Actions, no need to configure
-        run: uv tool run semantic-release -v --strict version --skip-build
+        run: uv run semantic-release -v --strict version --skip-build
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: uv tool run semantic-release -v publish
+        run: uv run semantic-release -v publish
 
       - name: Publish to PyPI
         run: uv publish
