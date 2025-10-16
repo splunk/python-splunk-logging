@@ -1,26 +1,30 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "python-splunk-logging"
-description = "Splunk logging for Python"
+version = "0.0.0"
+description = "Python logging module for logging json formatted log messages to a HTTP Event Collector (HEC)."
 authors = [
-    { name = "Alexander Baker", email = "alebaker@cisco.com" },
-    { name = "Eric Li", email = "erili2@cisco.com"}
+    { name = "Alexander Baker", email = "alexb@splunk.com" },
+    { name = "Eric Li", email = "ericli@splunk.com"}
 ]
 requires-python = ">=3.9"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+keywords = ["cisco", "splunk", "logging", "http", "hec", "json"]
 classifiers = [
-    "Programming Language :: Python",
-    "Development Status :: 5 - Stable",
+    "Programming Language :: Python :: 3",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: Apache Software License",
+    "Typing :: Typed",
+    "Natural Language :: English",
 ]
-dynamic = ["version", ]
 dependencies = [
     "httpx>=0.28.1",
     "python-dateutil>=2.9.0",
@@ -30,6 +34,7 @@ dependencies = [
 dev = [
     "black>=25.1.0",
     "isort>=6.0.1",
+    "python-semantic-release>=10.4.1",
     "respx>=0.22.0",
     "ruff>=0.12.4",
     "tox>=4.27.0",
@@ -39,6 +44,9 @@ dev = [
 [project.urls]
 repository = "https://github.com/splunk/python-splunk-logging"
 
+[tool.hatch.build.targets.wheel]
+packages = ["splunk_logging"]
+
 [tool.black]
 line-length = 120
 
@@ -47,6 +55,7 @@ line_length = 120
 profile = "black"
 
 [tool.ruff]
+target-version = "py39"
 line-length = 120
 extend-exclude = ["test"]
 
@@ -55,6 +64,23 @@ select = ["F", "E", "N", "A", "C4", "ISC", "PT", "Q", "RET", "SLF", "ARG", "PTH"
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version", "splunk_logging/__init__.py:__version__"]
+commit_parser = "conventional"
+commit_message = "chore(release): update version to ${version} [skip ci]"
+assets = ["pyproject.toml", "uv.lock"]
+build_command = """
+    uv lock --upgrade-package "$PACKAGE_NAME"
+    uv build
+"""
+
+[tool.semantic_release.remote]
+type = "github"
+
+[tool.semantic_release.publish]
+dist_glob_patterns = ["dist/*"]
+upload_to_vcs_release = true
 
 [tool.tox]
 requires = ["tox>=4"]

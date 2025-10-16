@@ -1,0 +1,54 @@
+name: Publish to PyPI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  semantic_release:
+    runs-on: ubuntu-latest
+    concurrency:
+      # Guarantee only one ongoing release job per branch at a time
+      group: pypi-${{ github.ref }}
+      cancel-in-progress: false
+    environment: pypi
+    permissions:
+      contents: write       # Required for semantic-release to create release tags
+      pull-requests: write  # Required for semantic-release to comment on PRs in release
+      id-token: write       # Required for trusted publishing
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for semantic-release to function correctly
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      # - name: Install deps
+      #   run: uv sync --locked --all-extras --dev
+
+      - name: Build next version
+        run: uv run semantic-release -v version --no-changelog --no-commit --no-tag
+
+      - name: Test wheel
+        run: uv run --isolated --no-project --with dist/*.whl -- python -c "import splunk_logging; print(splunk_logging.__version__)"
+
+      - name: Test source distribution
+        run: uv run --isolated --no-project --with dist/*.tar.gz -- python -c "import splunk_logging; print(splunk_logging.__version__)"
+
+      # - name: Semantic Release
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Provided by GitHub Actions, no need to configure
+      #   run: uv tool run semantic-release -v --strict version --skip-build
+
+      # - name: Publish GitHub Release
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: uv tool run semantic-release -v publish
+
+      # - name: Publish to PyPI
+      #   run: uv publish
