@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "python-splunk-logging"
-version = "0.0.0"
+version = "1.0.0"
 description = "Python logging module for logging json formatted log messages to a HTTP Event Collector (HEC)."
 authors = [
     { name = "Alexander Baker", email = "alexb@splunk.com" },
