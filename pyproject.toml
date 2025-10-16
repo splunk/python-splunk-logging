@@ -69,7 +69,6 @@ inline-quotes = "double"
 version_toml = ["pyproject.toml:project.version", "splunk_logging/__init__.py:__version__"]
 commit_parser = "conventional"
 commit_message = "chore(release): update version to ${version} [skip ci]"
-assets = ["pyproject.toml", "uv.lock"]
 build_command = """
     uv lock --upgrade-package "$PACKAGE_NAME"
     uv build
