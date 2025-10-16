@@ -28,8 +28,8 @@ jobs:
           enable-cache: true
           python-version: "3.13"
 
-      - name: Install semantic-release
-        run: uv pip install python-semantic-release
+      - name: Install deps
+        run: uv sync --dev
 
       - name: Build next version
         run: uv run semantic-release -v version --no-changelog --no-commit --no-tag
