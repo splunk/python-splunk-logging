@@ -24,10 +24,10 @@ jobs:
       - name: Install deps
         run: uv sync --dev
 
-      - name: Check if this is a release commit
+      - name: Check if a new release is needed
         id: check_release
         run: |
-          if [[ $(uv run semantic-release version --print) == $(uv run semantic-release version --print-last-release) ]]; then
+          if [[ $(uv run semantic-release version --print) == $(uv run semantic-released version --print-last-release) ]]; then
             echo "new_release=false" >> $GITHUB_OUTPUT
           else
             echo "new_release=true" >> $GITHUB_OUTPUT
