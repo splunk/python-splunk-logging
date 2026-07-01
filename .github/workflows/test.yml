@@ -14,16 +14,19 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install UV
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           python-version: "3.13"
 
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
       - name: Run Linters
-        run: uv tool run tox -e lint
+        run: uv run --locked tox -e lint
 
   test:
     runs-on: ubuntu-latest
@@ -31,16 +34,18 @@ jobs:
       matrix:
         python-version:
           - "3.9"
-          - "3.13"
+          - "3.14"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install UV
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
-      - name: Run Tests
-        run: uv tool run tox -e test
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
 
+      - name: Run Tests
+        run: uv run --locked tox -e test
