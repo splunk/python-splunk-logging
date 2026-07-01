@@ -16,7 +16,7 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for semantic-release to function correctly
 
       - name: Install UV
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
           python-version: "3.13"
@@ -52,7 +52,7 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for semantic-release to function correctly
 
       - name: Install UV
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
           python-version: "3.13"
