@@ -49,6 +49,7 @@ packages = ["splunk_logging"]
 
 [tool.black]
 line-length = 120
+target-version = ["py39"]
 
 [tool.isort]
 line_length = 120
@@ -101,4 +102,3 @@ commands = [["isort", "."], ["black", "."]]
 [tool.tox.env.test]
 description = "run unit tests"
 commands = [["python", "-m", "unittest", "discover", "-s", "test"]]
-
