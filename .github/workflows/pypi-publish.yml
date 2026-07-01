@@ -11,18 +11,18 @@ jobs:
     outputs:
       new_release: ${{ steps.check_release.outputs.new_release }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Shallow clones should be disabled for semantic-release to function correctly
 
       - name: Install UV
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
           python-version: "3.13"
 
       - name: Install deps
-        run: uv sync --dev
+        run: uv sync --locked --all-groups
 
       - name: Check if a new release is needed
         id: check_release
@@ -47,18 +47,18 @@ jobs:
       pull-requests: write  # Required for semantic-release to comment on PRs in release
       id-token: write       # Required for trusted publishing
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Shallow clones should be disabled for semantic-release to function correctly
 
       - name: Install UV
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
           python-version: "3.13"
 
       - name: Install deps
-        run: uv sync --dev
+        run: uv sync --locked --all-groups
 
       - name: Build next version
         run: uv run semantic-release -v version --no-changelog --no-commit --no-tag
