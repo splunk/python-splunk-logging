@@ -9,6 +9,8 @@ splunk instance using the HTTP Event Collector (HEC).
 pip install python-splunk-logging
 ```
 
+Python 3.9 or newer is required.
+
 ## Usage
 
 ### JsonFormatter
@@ -101,7 +103,6 @@ Initialize the collector:
 ```python
 import os
 import socket
-import time
 from splunk_logging.forwarders import HecForwarder
 
 hec = HecForwarder(
@@ -129,6 +130,73 @@ hec.forward_event(
     index=""
 )
 ```
+
+`forward_events()` sends a sequence of events in one HEC request using Splunk's
+[JSON event batching protocol](https://help.splunk.com/en/splunk-enterprise/get-started/get-data-in/9.2/get-data-with-http-event-collector/format-events-for-http-event-collector):
+
+```python
+hec.forward_events(events)
+```
+
+Forwarders are context managers. A context manager or an explicit `close()` call should be used to release the
+underlying HTTP client:
+
+```python
+with HecForwarder(host="localhost", token=os.environ["HEC_TOKEN"]) as hec:
+    hec.forward_event(event)
+```
+
+#### Indexer acknowledgment
+
+Indexer acknowledgment is opt-in and remains blocking: each forwarding call waits until Splunk confirms that its
+request has been indexed. The default 10-second polling interval and 5-minute timeout follow Splunk's
+[HEC indexer acknowledgment guidance](https://help.splunk.com/en/data-management/get-data-in/get-data-into-splunk-enterprise/9.3/get-data-with-http-event-collector/about-http-event-collector-indexer-acknowledgment).
+
+```python
+with HecForwarder(
+    host="localhost",
+    token=os.environ["HEC_ACK_TOKEN"],
+    indexer_ack=True,
+    ack_poll_interval=10,
+    ack_timeout=300,
+) as hec:
+    hec.forward_events(events)
+```
+
+The HEC token must have indexer acknowledgment enabled. A UUID channel is generated per forwarder unless
+`channel_id` is supplied. Missing, malformed, failed, or timed-out acknowledgments raise typed exceptions from
+`splunk_logging.exceptions`.
+
+#### Background batching
+
+`BatchHecForwarder` adds an in-memory bounded queue and one background delivery worker while preserving the
+`forward_event()` and `forward_events()` interfaces. It sends a batch when it reaches the event or byte limit, when
+the flush interval expires, or when `flush()`/`close()` is called.
+
+```python
+from splunk_logging.forwarders import BatchHecForwarder
+
+with BatchHecForwarder(
+    host="localhost",
+    token=os.environ["HEC_TOKEN"],
+    batch_size=100,
+    max_batch_bytes=1_048_576,
+    flush_interval=2,
+    max_queue_size=10_000,
+    max_queue_bytes=10_485_760,
+    enqueue_timeout=None,
+) as hec:
+    hec.forward_events(events)
+    hec.flush()
+```
+
+`enqueue_timeout=None` applies backpressure until capacity is available. Set it to a number of seconds, including
+zero for a non-blocking attempt, to raise `HecQueueFullError` instead. After a background delivery failure, the next
+forwarding call, `flush()`, or `close()` raises `HecWorkerError`. With `indexer_ack=True`, the same worker waits for
+the current batch acknowledgment before sending the next batch.
+
+The queue is memory-only. Always call `close()` or use the context manager so the final batch is flushed before
+process exit.
 
 ### HecHandler
 
@@ -182,7 +250,29 @@ logger.info(
 )
 ```
 
-To prevent Splunk logging from slowing down the application, a queue can be used to buffer the log messages.
+The handler can opt into the same background batching behavior without changing its default synchronous behavior:
+
+```python
+hec_handler = HecHandler(
+    host="localhost",
+    token=os.environ["HEC_TOKEN"],
+    batch_enabled=True,
+    batch_size=100,
+    flush_interval=2,
+)
+
+try:
+    root.addHandler(hec_handler)
+    logger.info({"a": 1, "b": 2})
+finally:
+    hec_handler.close()
+```
+
+`HecHandler.flush()` and `HecHandler.close()` delegate to the batch forwarder when batching is enabled. All
+forwarder acknowledgment and queue options can also be passed to the handler.
+
+An application-level logging queue can also be used when logging dispatch itself needs to be isolated from the
+calling thread.
 See [Dealing with handlers that block](https://docs.python.org/3/howto/logging-cookbook.html#dealing-with-handlers-that-block) for details.
 
 ```python
