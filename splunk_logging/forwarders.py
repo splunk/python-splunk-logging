@@ -13,17 +13,39 @@
 # limitations under the License.
 
 import json
+import queue
 import random
 import socket
+import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional, Union
 
 import httpx
 from dateutil.parser import isoparse
 
-from .exceptions import HecAckError, HecAckTimeoutError
+from .exceptions import (
+    HecAckError,
+    HecAckTimeoutError,
+    HecBatchError,
+    HecEventTooLargeError,
+    HecQueueFullError,
+    HecWorkerError,
+)
+
+
+@dataclass(frozen=True)
+class _QueuedEvent:
+    envelope: dict
+    payload: str
+    size: int
+
+
+@dataclass
+class _FlushRequest:
+    completed: bool = False
 
 
 class HecForwarder:
@@ -103,12 +125,6 @@ class HecForwarder:
         self._max_retries = 3
 
         self._client = self._create_client()
-        return
-
-    def __del__(self):
-        client = getattr(self, "_client", None)
-        if client:
-            client.close()
         return
 
     def __enter__(self):
@@ -331,11 +347,258 @@ class HecForwarder:
         hec_events = [
             self._build_hec_event(event, eventtime=eventtime(event), timefmt=timefmt, **kwargs) for event in events
         ]
-        payload = "".join(json.dumps(hec_event) for hec_event in hec_events)
+        self._send_hec_events(hec_events)
+        return
+
+    def _send_hec_events(self, hec_events: list[dict]):
+        payload = "".join(self._serialize_hec_event(hec_event) for hec_event in hec_events)
+        self._send_hec_payload(payload, event_count=len(hec_events))
+
+    def _serialize_hec_event(self, hec_event: dict) -> str:
+        return json.dumps(hec_event)
+
+    def _send_hec_payload(self, payload: str, *, event_count: int):
         headers = {
             "Content-Type": "application/json",
             **self._event_headers(),
         }
-        response = self._request("POST", "/services/collector/event", headers=headers, content=payload)
+        try:
+            response = self._request("POST", "/services/collector/event", headers=headers, content=payload)
+        except httpx.HTTPStatusError as error:
+            try:
+                invalid_event_number = int(error.response.json()["invalid-event-number"])
+            except (KeyError, TypeError, ValueError):
+                raise error
+            if not 0 <= invalid_event_number < event_count:
+                raise error
+            raise HecBatchError(invalid_event_number, event_count, error.response) from error
         self._wait_for_response_acknowledgment(response)
+
+
+class BatchHecForwarder(HecForwarder):
+    def __init__(
+        self,
+        *args,
+        batch_size: int = 100,
+        max_batch_bytes: int = 1_048_576,
+        flush_interval: float = 2.0,
+        max_queue_size: int = 10_000,
+        max_queue_bytes: int = 10_485_760,
+        enqueue_timeout: Optional[float] = None,
+        **kwargs,
+    ):
+        limits = {
+            "batch_size": batch_size,
+            "max_batch_bytes": max_batch_bytes,
+            "flush_interval": flush_interval,
+            "max_queue_size": max_queue_size,
+            "max_queue_bytes": max_queue_bytes,
+        }
+        for name, value in limits.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        if enqueue_timeout is not None and enqueue_timeout < 0:
+            raise ValueError("enqueue_timeout cannot be negative")
+
+        super().__init__(*args, **kwargs)
+        self._batch_size = batch_size
+        self._max_batch_bytes = max_batch_bytes
+        self._flush_interval = flush_interval
+        self._max_queue_size = max_queue_size
+        self._max_queue_bytes = max_queue_bytes
+        self._enqueue_timeout = enqueue_timeout
+        self._queue = queue.Queue()
+        self._capacity = threading.Condition()
+        self._producer_lock = threading.RLock()
+        self._pending_count = 0
+        self._pending_bytes = 0
+        self._worker_error = None
+        self._failed_batch = ()
+        self._accepting = True
+        self._stop = object()
+        self._closed = False
+        self._worker_thread = threading.Thread(target=self._worker, name="splunk-hec-batch", daemon=True)
+        self._worker_thread.start()
+
+    def forward_event(
+        self,
+        event: dict,
+        eventtime: Optional[Union[str, int, float, datetime]] = None,
+        timefmt: Optional[str] = None,
+        **kwargs,
+    ):
+        queued_event = self._prepare_queued_event(event, eventtime=eventtime, timefmt=timefmt, **kwargs)
+        deadline = None if self._enqueue_timeout is None else time.monotonic() + self._enqueue_timeout
+        with self._producer_lock:
+            self._enqueue(queued_event, deadline=deadline, enqueued_count=0, next_event_index=0)
+
+    def forward_events(
+        self,
+        events: list[dict],
+        eventtime: Callable = lambda _: datetime.now(),
+        timefmt: Optional[str] = None,
+        **kwargs,
+    ):
+        deadline = None if self._enqueue_timeout is None else time.monotonic() + self._enqueue_timeout
+        with self._producer_lock:
+            for index, event in enumerate(events):
+                queued_event = self._prepare_queued_event(
+                    event,
+                    eventtime=eventtime(event),
+                    timefmt=timefmt,
+                    **kwargs,
+                )
+                self._enqueue(
+                    queued_event,
+                    deadline=deadline,
+                    enqueued_count=index,
+                    next_event_index=index,
+                )
+
+    def _enqueue(
+        self,
+        queued_event: _QueuedEvent,
+        *,
+        deadline: Optional[float],
+        enqueued_count: int,
+        next_event_index: int,
+    ):
+        with self._capacity:
+            self._raise_if_worker_failed()
+            if not self._accepting:
+                raise RuntimeError("BatchHecForwarder is closed")
+            while (
+                self._pending_count + 1 > self._max_queue_size
+                or self._pending_bytes + queued_event.size > self._max_queue_bytes
+            ):
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise HecQueueFullError(enqueued_count, next_event_index)
+                else:
+                    remaining = None
+                self._capacity.wait(timeout=remaining)
+                self._raise_if_worker_failed()
+                if not self._accepting:
+                    raise RuntimeError("BatchHecForwarder is closed")
+
+            self._pending_count += 1
+            self._pending_bytes += queued_event.size
+            self._queue.put(queued_event)
+
+    def _prepare_queued_event(
+        self,
+        event: dict,
+        eventtime: Optional[Union[str, int, float, datetime]] = None,
+        timefmt: Optional[str] = None,
+        **kwargs,
+    ) -> _QueuedEvent:
+        envelope = self._build_hec_event(event, eventtime=eventtime, timefmt=timefmt, **kwargs)
+        payload = self._serialize_hec_event(envelope)
+        event_size = len(payload.encode("utf-8"))
+        event_limit = min(self._max_batch_bytes, self._max_queue_bytes)
+        if event_size > event_limit:
+            raise HecEventTooLargeError(event_size, event_limit)
+        return _QueuedEvent(envelope=envelope, payload=payload, size=event_size)
+
+    def flush(self):
+        with self._producer_lock:
+            with self._capacity:
+                self._raise_if_worker_failed()
+                if self._pending_count == 0:
+                    return
+            request = _FlushRequest()
+            self._queue.put(request)
+
+        with self._capacity:
+            while not request.completed:
+                self._raise_if_worker_failed()
+                self._capacity.wait()
+            self._raise_if_worker_failed()
+
+    def close(self):
+        if self._closed:
+            self._raise_if_worker_failed()
+            return
+
+        with self._producer_lock:
+            self._accepting = False
+
+        delivery_error = None
+        try:
+            self.flush()
+        except HecWorkerError as error:
+            delivery_error = error
+
+        if self._worker_thread.is_alive():
+            self._queue.put(self._stop)
+            self._worker_thread.join()
+        super().close()
+        self._closed = True
+        if delivery_error is not None:
+            raise delivery_error
+
+    def _raise_if_worker_failed(self):
+        if self._worker_error is not None:
+            raise HecWorkerError(
+                "Background HEC batch delivery failed",
+                self._worker_error,
+                tuple(queued_event.envelope for queued_event in self._failed_batch),
+            ) from self._worker_error
+
+    def _worker(self):
+        deferred_item = None
+        while True:
+            if deferred_item is None:
+                item = self._queue.get()
+            else:
+                item = deferred_item
+                deferred_item = None
+            if item is self._stop:
+                return
+            if isinstance(item, _FlushRequest):
+                with self._capacity:
+                    item.completed = True
+                    self._capacity.notify_all()
+                continue
+
+            batch = [item]
+            batch_bytes = item.size
+            deadline = time.monotonic() + self._flush_interval
+            flush_request = None
+            while len(batch) < self._batch_size:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+                try:
+                    next_item = self._queue.get(timeout=timeout)
+                except queue.Empty:
+                    break
+                if isinstance(next_item, _FlushRequest):
+                    flush_request = next_item
+                    break
+                if batch_bytes + next_item.size > self._max_batch_bytes:
+                    deferred_item = next_item
+                    break
+                batch.append(next_item)
+                batch_bytes += next_item.size
+
+            try:
+                self._send_hec_payload(
+                    "".join(queued_event.payload for queued_event in batch),
+                    event_count=len(batch),
+                )
+            except Exception as error:
+                with self._capacity:
+                    self._worker_error = error
+                    self._failed_batch = tuple(batch)
+                    self._capacity.notify_all()
+                return
+
+            with self._capacity:
+                self._pending_count -= len(batch)
+                self._pending_bytes -= sum(queued_event.size for queued_event in batch)
+                if flush_request is not None:
+                    flush_request.completed = True
+                self._capacity.notify_all()
         return
