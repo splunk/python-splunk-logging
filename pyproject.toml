@@ -53,19 +53,19 @@ packages = ["splunk_logging"]
 
 [tool.black]
 line-length = 120
-target-version = ["py39"]
+target-version = ["py311"]
 
 [tool.isort]
 line_length = 120
 profile = "black"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 line-length = 120
 extend-exclude = ["test"]
 
 [tool.ruff.lint]
-select = ["F", "E", "N", "A", "C4", "ISC", "PT", "Q", "RET", "SLF", "ARG", "PTH", "RUF"]
+select = ["F", "E", "N", "A", "C4", "ISC", "PT", "Q", "RET", "SLF", "ARG", "PTH", "RUF", "UP"]
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"

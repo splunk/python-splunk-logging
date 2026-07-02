@@ -14,16 +14,15 @@
 
 import json
 import logging
-from typing import Optional
 
 
 class JsonFormatter(logging.Formatter):
     def __init__(
         self,
-        fmt: Optional[str] = None,
-        datefmt: Optional[str] = None,
+        fmt: str | None = None,
+        datefmt: str | None = None,
         prune_keys: bool = True,
-        serializer_args: Optional[dict] = None,
+        serializer_args: dict | None = None,
         **default_keys,
     ):
         """
