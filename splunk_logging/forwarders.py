@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import random
 import socket
 import time
@@ -180,6 +181,20 @@ class HecForwarder:
                     index to send this event to. This will overwrite the default index configured for this event only
                     (default: default_index)
         """
+        hec_event = self._build_hec_event(event, eventtime=eventtime, timefmt=timefmt, **kwargs)
+
+        headers = {"X-Splunk-Request-Channel": str(uuid.uuid1())}
+
+        self._request("POST", "/services/collector/event", headers=headers, json=hec_event)
+        return
+
+    def _build_hec_event(
+        self,
+        event: dict,
+        eventtime: Optional[Union[str, int, float, datetime]] = None,
+        timefmt: Optional[str] = None,
+        **kwargs,
+    ) -> dict:
         eventtime = eventtime or datetime.now()
         host = kwargs.get("host", self._default_host)
         source = kwargs.get("source", self._default_source)
@@ -199,11 +214,7 @@ class HecForwarder:
             hec_event["index"] = index
 
         hec_event["time"] = str(self._parse_timestamp(eventtime, timefmt=timefmt))
-
-        headers = {"X-Splunk-Request-Channel": str(uuid.uuid1())}
-
-        self._request("POST", "/services/collector/event", headers=headers, json=hec_event)
-        return
+        return hec_event
 
     def forward_events(
         self,
@@ -239,6 +250,16 @@ class HecForwarder:
                     index to send this event to. This will overwrite the default index configured for all events in
                     this list. (default: default_index)
         """
-        for event in events:
-            self.forward_event(event, eventtime=eventtime(event), timefmt=timefmt, **kwargs)
+        if not events:
+            return
+
+        hec_events = [
+            self._build_hec_event(event, eventtime=eventtime(event), timefmt=timefmt, **kwargs) for event in events
+        ]
+        payload = "".join(json.dumps(hec_event) for hec_event in hec_events)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Splunk-Request-Channel": str(uuid.uuid1()),
+        }
+        self._request("POST", "/services/collector/event", headers=headers, content=payload)
         return

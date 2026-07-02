@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import random
 import unittest
 from datetime import datetime
@@ -43,6 +44,39 @@ class TestHecForwarder(unittest.TestCase):
         with self.assertRaises(httpx.HTTPStatusError):
             hec.forward_event(event)
         return
+
+    @respx.mock
+    def test_forward_events_sends_one_batched_request(self):
+        hec = self.create_forwarder()
+        route = respx.post("http://localhost:8088/services/collector/event")
+        route.return_value = httpx.Response(200, json={"text": "Success", "code": 0})
+        events = [{"message": "first"}, {"message": "second"}]
+        event_times = {
+            "first": datetime(2026, 1, 1, 12, 0, 0),
+            "second": datetime(2026, 1, 1, 12, 0, 1),
+        }
+
+        hec.forward_events(events, eventtime=lambda event: event_times[event["message"]])
+
+        self.assertEqual(route.call_count, 1)
+        payload = route.calls.last.request.content.decode()
+        decoder = json.JSONDecoder()
+        first, offset = decoder.raw_decode(payload)
+        second, offset = decoder.raw_decode(payload, offset)
+        self.assertEqual(offset, len(payload))
+        self.assertEqual(first["event"], events[0])
+        self.assertEqual(second["event"], events[1])
+        self.assertEqual(first["time"], str(event_times["first"].timestamp()))
+        self.assertEqual(second["time"], str(event_times["second"].timestamp()))
+
+    @respx.mock
+    def test_forward_events_with_no_events_sends_no_request(self):
+        hec = self.create_forwarder()
+        route = respx.post("http://localhost:8088/services/collector/event")
+
+        hec.forward_events([])
+
+        self.assertFalse(route.called)
 
     @respx.mock
     @patch("splunk_logging.forwarders.time.sleep")
