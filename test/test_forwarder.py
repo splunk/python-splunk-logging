@@ -15,6 +15,7 @@
 import random
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 
 import httpx
 import respx
@@ -44,7 +45,8 @@ class TestHecForwarder(unittest.TestCase):
         return
 
     @respx.mock
-    def test_retry(self):
+    @patch("splunk_logging.forwarders.time.sleep")
+    def test_retry(self, sleep):
         hec = self.create_forwarder()
         route = respx.post("http://localhost:8088/services/collector/event")
         event = {"message": "test"}
@@ -55,8 +57,37 @@ class TestHecForwarder(unittest.TestCase):
             hec.forward_event(event)
 
         self.assertTrue(route.called)
-        self.assertGreaterEqual(route.call_count, 3)
+        self.assertEqual(route.call_count, 4)
+        self.assertEqual(sleep.call_count, 3)
         return
+
+    @respx.mock
+    @patch("splunk_logging.forwarders.time.sleep")
+    def test_retry_returns_successful_response(self, _sleep):
+        hec = self.create_forwarder()
+        route = respx.post("http://localhost:8088/services/collector/event")
+        route.side_effect = [
+            httpx.Response(httpx.codes.SERVICE_UNAVAILABLE),
+            httpx.Response(httpx.codes.OK, json={"text": "Success", "code": 0}),
+        ]
+
+        hec.forward_event({"message": "test"})
+
+        self.assertEqual(route.call_count, 2)
+
+    @respx.mock
+    @patch("splunk_logging.forwarders.time.sleep")
+    def test_retry_honors_retry_after(self, sleep):
+        hec = self.create_forwarder()
+        route = respx.post("http://localhost:8088/services/collector/event")
+        route.side_effect = [
+            httpx.Response(httpx.codes.TOO_MANY_REQUESTS, headers={"Retry-After": "7"}),
+            httpx.Response(httpx.codes.OK, json={"text": "Success", "code": 0}),
+        ]
+
+        hec.forward_event({"message": "test"})
+
+        sleep.assert_called_once_with(7.0)
 
     def test_parse_timestamp(self):
         hec = self.create_forwarder()

@@ -24,6 +24,15 @@ from dateutil.parser import isoparse
 
 
 class HecForwarder:
+    _RETRY_STATUS_CODES = frozenset(
+        [
+            httpx.codes.REQUEST_TIMEOUT,
+            httpx.codes.TOO_MANY_REQUESTS,
+            httpx.codes.INTERNAL_SERVER_ERROR,
+            httpx.codes.SERVICE_UNAVAILABLE,
+        ]
+    )
+
     def __init__(
         self,
         host: str = "localhost",
@@ -68,6 +77,8 @@ class HecForwarder:
         self._default_source = default_source or ""
         self._default_sourcetype = default_sourcetype or ""
         self._default_index = default_index or ""
+        self._backoff_factor = 1
+        self._max_retries = 3
 
         self._client = self._create_client()
         return
@@ -79,45 +90,34 @@ class HecForwarder:
 
     def _create_client(self) -> httpx.Client:
         scheme = "https" if self._use_ssl else "http"
-        client = httpx.Client(
+        return httpx.Client(
             base_url=httpx.URL(scheme=scheme, host=self._host, port=self._port),
             verify=self._verify_ssl,
             headers={"Authorization": f"Splunk {self._token}"},
-            event_hooks={"response": [self._client_retry]},
         )
 
-        client.backoff_factor = 1
-        client.max_retries = 3
-        client.retry_attempt = 0
-        return client
+    def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        retry_attempt = 0
+        while True:
+            response = self._client.request(method, path, **kwargs)
+            if response.status_code not in self._RETRY_STATUS_CODES:
+                response.raise_for_status()
+                return response
 
-    def _client_retry(self, response: httpx.Response):
-        """
-        Handles retry logic for HTTP requests based on response status codes.
+            if retry_attempt >= self._max_retries:
+                response.raise_for_status()
 
-        Args:
-            response (httpx.Response): The HTTP response object.
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = float(retry_after) if retry_after is not None else None
+            except ValueError:
+                delay = None
 
-        Retries the request if the response status code indicates a transient error,
-        otherwise raises for status.
-        """
-        retry_codes = [
-            httpx.codes.REQUEST_TIMEOUT,
-            httpx.codes.TOO_MANY_REQUESTS,
-            httpx.codes.INTERNAL_SERVER_ERROR,
-            httpx.codes.SERVICE_UNAVAILABLE,
-        ]
-        if response.status_code in retry_codes and self._client.retry_attempt < self._client.max_retries:
-            time.sleep(
-                self._client.backoff_factor * 2**self._client.retry_attempt
-                + random.uniform(0, self._client.retry_attempt)
-            )
-            self._client.retry_attempt += 1
-            self._client.send(response.request)
-        else:
-            self._client.retry_attempt = 0
-            response.raise_for_status()
-        return
+            if delay is None:
+                delay = self._backoff_factor * 2**retry_attempt + random.uniform(0, retry_attempt)
+
+            time.sleep(delay)
+            retry_attempt += 1
 
     def _parse_timestamp(self, timeinfo: Union[str, int, float, datetime], timefmt: Optional[str] = None) -> float:
         """
@@ -202,8 +202,7 @@ class HecForwarder:
 
         headers = {"X-Splunk-Request-Channel": str(uuid.uuid1())}
 
-        resp = self._client.post("/services/collector/event", headers=headers, json=hec_event)
-        resp.raise_for_status()
+        self._request("POST", "/services/collector/event", headers=headers, json=hec_event)
         return
 
     def forward_events(
