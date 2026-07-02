@@ -79,6 +79,135 @@ class TestHecForwarder(unittest.TestCase):
         self.assertFalse(route.called)
 
     @respx.mock
+    def test_forward_event_waits_for_indexer_acknowledgment(self):
+        channel_id = "fe0ecfad-13d5-401b-847d-77833bd77131"
+        hec = HecForwarder(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+            channel_id=channel_id,
+            ack_poll_interval=0,
+        )
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, json={"text": "Success", "code": 0, "ackId": 7})
+        ack_route = respx.post("http://localhost:8088/services/collector/ack")
+        ack_route.return_value = httpx.Response(200, json={"acks": {"7": True}})
+
+        hec.forward_event({"message": "test"})
+
+        self.assertEqual(event_route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
+        self.assertEqual(ack_route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
+        self.assertEqual(json.loads(ack_route.calls.last.request.content), {"acks": [7]})
+
+    @respx.mock
+    @patch("splunk_logging.forwarders.time.sleep")
+    def test_forward_event_polls_until_indexer_acknowledges(self, sleep):
+        hec = HecForwarder(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+        )
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, json={"text": "Success", "code": 0, "ackId": 7})
+        ack_route = respx.post("http://localhost:8088/services/collector/ack")
+        ack_route.side_effect = [
+            httpx.Response(200, json={"acks": {"7": False}}),
+            httpx.Response(200, json={"acks": {"7": True}}),
+        ]
+
+        hec.forward_event({"message": "test"})
+
+        self.assertEqual(ack_route.call_count, 2)
+        sleep.assert_called_once_with(10.0)
+
+    @respx.mock
+    @patch("splunk_logging.forwarders.time.monotonic", side_effect=[0.0, 1.0])
+    def test_forward_event_raises_typed_acknowledgment_timeout(self, _monotonic):
+        from splunk_logging.exceptions import HecAckTimeoutError
+
+        hec = HecForwarder(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+            ack_timeout=1.0,
+        )
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, json={"text": "Success", "code": 0, "ackId": 7})
+        ack_route = respx.post("http://localhost:8088/services/collector/ack")
+        ack_route.return_value = httpx.Response(200, json={"acks": {"7": False}})
+
+        with self.assertRaises(HecAckTimeoutError):
+            hec.forward_event({"message": "test"})
+
+    @respx.mock
+    def test_forward_event_raises_ack_error_when_response_has_no_ack_id(self):
+        from splunk_logging.exceptions import HecAckError
+
+        hec = HecForwarder(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+        )
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, json={"text": "Success", "code": 0})
+
+        with self.assertRaises(HecAckError):
+            hec.forward_event({"message": "test"})
+
+    @respx.mock
+    def test_forward_event_raises_ack_error_when_response_is_not_json(self):
+        from splunk_logging.exceptions import HecAckError
+
+        hec = HecForwarder(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+        )
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, text="not json")
+
+        with self.assertRaises(HecAckError):
+            hec.forward_event({"message": "test"})
+
+    @respx.mock
+    def test_forward_event_raises_ack_error_when_status_is_missing(self):
+        from splunk_logging.exceptions import HecAckError
+
+        hec = HecForwarder(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+        )
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, json={"text": "Success", "code": 0, "ackId": 7})
+        ack_route = respx.post("http://localhost:8088/services/collector/ack")
+        ack_route.return_value = httpx.Response(200, json={"acks": {}})
+
+        with self.assertRaises(HecAckError):
+            hec.forward_event({"message": "test"})
+
+    def test_context_manager_closes_forwarder(self):
+        hec = self.create_forwarder()
+
+        with hec as entered:
+            self.assertIs(entered, hec)
+
+        with self.assertRaises(RuntimeError):
+            hec.forward_event({"message": "test"})
+
+    @respx.mock
     @patch("splunk_logging.forwarders.time.sleep")
     def test_retry(self, sleep):
         hec = self.create_forwarder()

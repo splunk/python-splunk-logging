@@ -35,6 +35,11 @@ class HecHandler(logging.Handler):
         default_sourcetype: Optional[str] = None,
         default_index: Optional[str] = None,
         ignore_exceptions: bool = True,
+        *,
+        indexer_ack: bool = False,
+        channel_id: Optional[str] = None,
+        ack_poll_interval: float = 10.0,
+        ack_timeout: float = 300.0,
         **kwargs,
     ):
         """
@@ -60,7 +65,15 @@ class HecHandler(logging.Handler):
             default_index (str, optional):
                 Default index to send events to. (default: None)
             ignore_exceptions (bool, optional):
-                Ignore exceptions thrown when sending an events. (default: False)
+                Ignore exceptions thrown when sending an events. (default: True)
+            indexer_ack (bool, optional):
+                Wait for Splunk indexer acknowledgment after sending events. (default: False)
+            channel_id (str, optional):
+                GUID used for indexer acknowledgment requests. (default: generated UUID)
+            ack_poll_interval (float, optional):
+                Seconds to wait between acknowledgment queries. (default: 10)
+            ack_timeout (float, optional):
+                Seconds to wait for an acknowledgment before raising. (default: 300)
         """
         super().__init__(**kwargs)
         self.setFormatter(JsonFormatter())
@@ -75,6 +88,10 @@ class HecHandler(logging.Handler):
             default_source=default_source or "",
             default_sourcetype=default_sourcetype or "",
             default_index=default_index or "",
+            indexer_ack=indexer_ack,
+            channel_id=channel_id,
+            ack_poll_interval=ack_poll_interval,
+            ack_timeout=ack_timeout,
         )
 
         self._ignore_exceptions = ignore_exceptions

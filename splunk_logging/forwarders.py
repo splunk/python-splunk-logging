@@ -23,6 +23,8 @@ from typing import Callable, Optional, Union
 import httpx
 from dateutil.parser import isoparse
 
+from .exceptions import HecAckError, HecAckTimeoutError
+
 
 class HecForwarder:
     _RETRY_STATUS_CODES = frozenset(
@@ -45,6 +47,11 @@ class HecForwarder:
         default_source: Optional[str] = None,
         default_sourcetype: Optional[str] = None,
         default_index: Optional[str] = None,
+        *,
+        indexer_ack: bool = False,
+        channel_id: Optional[str] = None,
+        ack_poll_interval: float = 10.0,
+        ack_timeout: float = 300.0,
     ):
         """
         Initializes a HecForwarder instance for sending events to a Splunk HEC listener.
@@ -68,6 +75,14 @@ class HecForwarder:
                 Default sourcetype to use when forwarding events. (default: "")
             default_index (str, optional):
                 Default index to send events. (default: "")
+            indexer_ack (bool, optional):
+                Wait for Splunk indexer acknowledgment after sending events. (default: False)
+            channel_id (str, optional):
+                GUID used for indexer acknowledgment requests. (default: generated UUID)
+            ack_poll_interval (float, optional):
+                Seconds to wait between acknowledgment queries. (default: 10)
+            ack_timeout (float, optional):
+                Seconds to wait for an acknowledgment before raising. (default: 300)
         """
         self._host = host
         self._port = port
@@ -78,6 +93,12 @@ class HecForwarder:
         self._default_source = default_source or ""
         self._default_sourcetype = default_sourcetype or ""
         self._default_index = default_index or ""
+        if channel_id is not None:
+            uuid.UUID(channel_id)
+        self._channel_id = channel_id or str(uuid.uuid4())
+        self._indexer_ack = indexer_ack
+        self._ack_poll_interval = ack_poll_interval
+        self._ack_timeout = ack_timeout
         self._backoff_factor = 1
         self._max_retries = 3
 
@@ -85,9 +106,19 @@ class HecForwarder:
         return
 
     def __del__(self):
-        if self._client:
-            self._client.close()
+        client = getattr(self, "_client", None)
+        if client:
+            client.close()
         return
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def close(self):
+        self._client.close()
 
     def _create_client(self) -> httpx.Client:
         scheme = "https" if self._use_ssl else "http"
@@ -183,10 +214,54 @@ class HecForwarder:
         """
         hec_event = self._build_hec_event(event, eventtime=eventtime, timefmt=timefmt, **kwargs)
 
-        headers = {"X-Splunk-Request-Channel": str(uuid.uuid1())}
+        headers = self._event_headers()
 
-        self._request("POST", "/services/collector/event", headers=headers, json=hec_event)
+        response = self._request("POST", "/services/collector/event", headers=headers, json=hec_event)
+        self._wait_for_response_acknowledgment(response)
         return
+
+    def _event_headers(self) -> dict[str, str]:
+        if self._indexer_ack:
+            return {"X-Splunk-Request-Channel": self._channel_id}
+        return {}
+
+    def _wait_for_response_acknowledgment(self, response: httpx.Response):
+        if not self._indexer_ack:
+            return
+
+        try:
+            response_data = response.json()
+            ack_id = response_data.get("ackId", response_data.get("ackID"))
+        except (AttributeError, TypeError, ValueError) as error:
+            raise HecAckError("HEC returned an invalid acknowledgment response") from error
+        if ack_id is None:
+            raise HecAckError("HEC response did not include an acknowledgment ID")
+        try:
+            normalized_ack_id = int(ack_id)
+        except (TypeError, ValueError) as error:
+            raise HecAckError(f"HEC returned an invalid acknowledgment ID: {ack_id!r}") from error
+        self._wait_for_acknowledgments([normalized_ack_id])
+
+    def _wait_for_acknowledgments(self, ack_ids: list[int]):
+        deadline = time.monotonic() + self._ack_timeout
+        headers = {"X-Splunk-Request-Channel": self._channel_id}
+        while True:
+            response = self._request(
+                "POST",
+                "/services/collector/ack",
+                headers=headers,
+                json={"acks": ack_ids},
+            )
+            try:
+                ack_statuses = response.json()["acks"]
+                statuses = [ack_statuses[str(ack_id)] for ack_id in ack_ids]
+            except (KeyError, TypeError, ValueError) as error:
+                raise HecAckError("HEC returned an invalid acknowledgment response") from error
+            if all(statuses):
+                return
+            if time.monotonic() >= deadline:
+                raise HecAckTimeoutError(f"Timed out waiting for acknowledgments: {ack_ids}")
+            time.sleep(self._ack_poll_interval)
 
     def _build_hec_event(
         self,
@@ -259,7 +334,8 @@ class HecForwarder:
         payload = "".join(json.dumps(hec_event) for hec_event in hec_events)
         headers = {
             "Content-Type": "application/json",
-            "X-Splunk-Request-Channel": str(uuid.uuid1()),
+            **self._event_headers(),
         }
-        self._request("POST", "/services/collector/event", headers=headers, content=payload)
+        response = self._request("POST", "/services/collector/event", headers=headers, content=payload)
+        self._wait_for_response_acknowledgment(response)
         return

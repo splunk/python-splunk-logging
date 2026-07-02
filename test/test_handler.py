@@ -48,3 +48,27 @@ class TestHecHandler(unittest.TestCase):
         self.assertIn("time", sent_event)
         self.assertEqual(json.dumps(sent_event["event"]), json.dumps(event))
         return
+
+    @respx.mock
+    def test_hec_logger_supports_indexer_acknowledgment(self):
+        channel_id = "fe0ecfad-13d5-401b-847d-77833bd77131"
+        log = logging.Logger("ack")
+        handler = HecHandler(
+            host="localhost",
+            port=8088,
+            token="",
+            use_ssl=False,
+            indexer_ack=True,
+            channel_id=channel_id,
+            ack_poll_interval=0,
+        )
+        log.addHandler(handler)
+        event_route = respx.post("http://localhost:8088/services/collector/event")
+        event_route.return_value = httpx.Response(200, json={"text": "Success", "code": 0, "ackId": 7})
+        ack_route = respx.post("http://localhost:8088/services/collector/ack")
+        ack_route.return_value = httpx.Response(200, json={"acks": {"7": True}})
+
+        log.warning({"message": "test"})
+
+        self.assertEqual(event_route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
+        self.assertEqual(ack_route.call_count, 1)
