@@ -195,8 +195,10 @@ zero for a non-blocking attempt, to raise `HecQueueFullError` instead. After a b
 forwarding call, `flush()`, or `close()` raises `HecWorkerError`. With `indexer_ack=True`, the same worker waits for
 the current batch acknowledgment before sending the next batch.
 
-The queue is memory-only. Always call `close()` or use the context manager so the final batch is flushed before
-process exit.
+> [!WARNING]
+> The batch queue is memory-only. Events that have not been successfully flushed before process termination are
+> lost. Always use the context manager or call `close()` (which performs a final flush) from the application's
+> graceful shutdown path. Abrupt termination, including `SIGKILL`, cannot flush the queue.
 
 ### HecHandler
 
@@ -270,6 +272,13 @@ finally:
 
 `HecHandler.flush()` and `HecHandler.close()` delegate to the batch forwarder when batching is enabled. All
 forwarder acknowledgment and queue options can also be passed to the handler.
+
+Python calls [`logging.shutdown()`](https://docs.python.org/3/library/logging.html#logging.shutdown) during normal
+interpreter shutdown, which flushes and closes registered handlers. An unhandled `SIGINT` normally reaches that path
+through `KeyboardInterrupt`; the default `SIGTERM` behavior does
+[not run Python exit handlers](https://docs.python.org/3/library/atexit.html). Service applications should handle
+`SIGTERM`, stop producing logs (and stop any `QueueListener`), then call `logging.shutdown()` from their graceful
+shutdown path. Hard termination cannot be made lossless with an in-memory queue.
 
 An application-level logging queue can also be used when logging dispatch itself needs to be isolated from the
 calling thread.

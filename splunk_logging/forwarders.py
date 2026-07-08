@@ -51,10 +51,10 @@ class _FlushRequest:
 class HecForwarder:
     _RETRY_STATUS_CODES = frozenset(
         [
-            httpx.codes.REQUEST_TIMEOUT,
-            httpx.codes.TOO_MANY_REQUESTS,
-            httpx.codes.INTERNAL_SERVER_ERROR,
-            httpx.codes.SERVICE_UNAVAILABLE,
+            408,  # Request Timeout
+            429,  # Too Many Requests
+            500,  # Internal Server Error
+            503,  # Service Unavailable
         ]
     )
 
@@ -233,7 +233,7 @@ class HecForwarder:
         headers = self._event_headers()
 
         response = self._request("POST", "/services/collector/event", headers=headers, json=hec_event)
-        self._wait_for_response_acknowledgment(response)
+        self._wait_for_ack_if_enabled(response)
         return
 
     def _event_headers(self) -> dict[str, str]:
@@ -241,7 +241,8 @@ class HecForwarder:
             return {"X-Splunk-Request-Channel": self._channel_id}
         return {}
 
-    def _wait_for_response_acknowledgment(self, response: httpx.Response):
+    def _wait_for_ack_if_enabled(self, response: httpx.Response):
+        """Wait for the response's indexer acknowledgment when configured."""
         if not self._indexer_ack:
             return
 
@@ -372,7 +373,7 @@ class HecForwarder:
             if not 0 <= invalid_event_number < event_count:
                 raise error
             raise HecBatchError(invalid_event_number, event_count, error.response) from error
-        self._wait_for_response_acknowledgment(response)
+        self._wait_for_ack_if_enabled(response)
 
 
 class BatchHecForwarder(HecForwarder):
