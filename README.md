@@ -146,6 +146,11 @@ with HecForwarder(host="localhost", token=os.environ["HEC_TOKEN"]) as hec:
     hec.forward_event(event)
 ```
 
+Event delivery retries connection-establishment failures, HTTP 408 responses, and Splunk HEC 503 responses whose
+body reports error code 9 (`Server is busy`). Ambiguous failures—including HTTP 429, 500, 502, generic 503, and 504
+responses and read/write transport errors—are raised without retrying because HEC might already have accepted the
+events.
+
 #### Indexer acknowledgment
 
 Indexer acknowledgment is opt-in and remains blocking: each forwarding call waits until Splunk confirms that its

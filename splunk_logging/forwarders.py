@@ -55,11 +55,14 @@ class HecForwarder:
     _RETRY_STATUS_CODES = frozenset(
         [
             408,  # Request Timeout
-            429,  # Too Many Requests
-            500,  # Internal Server Error
-            503,  # Service Unavailable
         ]
     )
+    _RETRY_HEC_ERROR_CODES = frozenset(
+        [
+            9,  # Server is busy
+        ]
+    )
+    _RETRY_CONNECTION_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout)
 
     def __init__(
         self,
@@ -165,35 +168,66 @@ class HecForwarder:
                 request_kwargs = dict(kwargs)
                 request_kwargs.setdefault("timeout", self._timeout_capped_by(remaining))
 
-            response = self._client.request(method, path, **request_kwargs)
+            try:
+                response = self._client.request(method, path, **request_kwargs)
+            except self._RETRY_CONNECTION_ERRORS:
+                if retry_attempt >= self._max_retries:
+                    raise
+                self._sleep_before_retry(retry_attempt, deadline=deadline)
+                retry_attempt += 1
+                continue
+
             if deadline is not None and time.monotonic() >= deadline:
                 raise _RequestDeadlineExceededError
-            if response.status_code not in self._RETRY_STATUS_CODES:
+            if not self._should_retry_response(response):
                 response.raise_for_status()
                 return response
 
             if retry_attempt >= self._max_retries:
                 response.raise_for_status()
 
-            retry_after = response.headers.get("Retry-After")
-            try:
-                delay = float(retry_after) if retry_after is not None else None
-            except ValueError:
-                delay = None
-
-            if delay is None:
-                delay = self._backoff_factor * 2**retry_attempt + random.uniform(0, retry_attempt)
-
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise _RequestDeadlineExceededError
-                delay = min(delay, remaining)
-
-            time.sleep(delay)
-            if deadline is not None and time.monotonic() >= deadline:
-                raise _RequestDeadlineExceededError
+            self._sleep_before_retry(
+                retry_attempt,
+                deadline=deadline,
+                retry_after=response.headers.get("Retry-After"),
+            )
             retry_attempt += 1
+
+    def _should_retry_response(self, response: httpx.Response) -> bool:
+        if response.status_code in self._RETRY_STATUS_CODES:
+            return True
+        if response.status_code != httpx.codes.SERVICE_UNAVAILABLE:
+            return False
+        try:
+            response_data = response.json()
+            return response_data.get("code") in self._RETRY_HEC_ERROR_CODES
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    def _sleep_before_retry(
+        self,
+        retry_attempt: int,
+        *,
+        deadline: Optional[float],
+        retry_after: Optional[str] = None,
+    ):
+        try:
+            delay = float(retry_after) if retry_after is not None else None
+        except ValueError:
+            delay = None
+
+        if delay is None:
+            delay = self._backoff_factor * 2**retry_attempt + random.uniform(0, retry_attempt)
+
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RequestDeadlineExceededError
+            delay = min(delay, remaining)
+
+        time.sleep(delay)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _RequestDeadlineExceededError
 
     def _timeout_capped_by(self, seconds: float) -> httpx.Timeout:
         def cap(value: Optional[float]) -> float:
