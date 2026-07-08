@@ -38,7 +38,6 @@ from .exceptions import (
 
 @dataclass(frozen=True)
 class _QueuedEvent:
-    envelope: dict
     payload: str
     size: int
 
@@ -46,6 +45,10 @@ class _QueuedEvent:
 @dataclass
 class _FlushRequest:
     completed: bool = False
+
+
+class _RequestDeadlineExceededError(Exception):
+    """Raised internally when an HTTP retry deadline expires."""
 
 
 class HecForwarder:
@@ -144,10 +147,27 @@ class HecForwarder:
             headers={"Authorization": f"Splunk {self._token}"},
         )
 
-    def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        deadline: Optional[float] = None,
+        **kwargs,
+    ) -> httpx.Response:
         retry_attempt = 0
         while True:
-            response = self._client.request(method, path, **kwargs)
+            request_kwargs = kwargs
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _RequestDeadlineExceededError
+                request_kwargs = dict(kwargs)
+                request_kwargs.setdefault("timeout", self._timeout_capped_by(remaining))
+
+            response = self._client.request(method, path, **request_kwargs)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise _RequestDeadlineExceededError
             if response.status_code not in self._RETRY_STATUS_CODES:
                 response.raise_for_status()
                 return response
@@ -164,8 +184,28 @@ class HecForwarder:
             if delay is None:
                 delay = self._backoff_factor * 2**retry_attempt + random.uniform(0, retry_attempt)
 
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _RequestDeadlineExceededError
+                delay = min(delay, remaining)
+
             time.sleep(delay)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise _RequestDeadlineExceededError
             retry_attempt += 1
+
+    def _timeout_capped_by(self, seconds: float) -> httpx.Timeout:
+        def cap(value: Optional[float]) -> float:
+            return seconds if value is None else min(value, seconds)
+
+        timeout = self._client.timeout
+        return httpx.Timeout(
+            connect=cap(timeout.connect),
+            read=cap(timeout.read),
+            write=cap(timeout.write),
+            pool=cap(timeout.pool),
+        )
 
     def _parse_timestamp(self, timeinfo: Union[str, int, float, datetime], timefmt: Optional[str] = None) -> float:
         """
@@ -237,9 +277,7 @@ class HecForwarder:
         return
 
     def _event_headers(self) -> dict[str, str]:
-        if self._indexer_ack:
-            return {"X-Splunk-Request-Channel": self._channel_id}
-        return {}
+        return {"X-Splunk-Request-Channel": self._channel_id}
 
     def _wait_for_ack_if_enabled(self, response: httpx.Response):
         """Wait for the response's indexer acknowledgment when configured."""
@@ -263,12 +301,20 @@ class HecForwarder:
         deadline = time.monotonic() + self._ack_timeout
         headers = {"X-Splunk-Request-Channel": self._channel_id}
         while True:
-            response = self._request(
-                "POST",
-                "/services/collector/ack",
-                headers=headers,
-                json={"acks": ack_ids},
-            )
+            try:
+                response = self._request(
+                    "POST",
+                    "/services/collector/ack",
+                    headers=headers,
+                    json={"acks": ack_ids},
+                    deadline=deadline,
+                )
+            except _RequestDeadlineExceededError as error:
+                raise HecAckTimeoutError(f"Timed out waiting for acknowledgments: {ack_ids}") from error
+            except httpx.HTTPError as error:
+                if time.monotonic() >= deadline:
+                    raise HecAckTimeoutError(f"Timed out waiting for acknowledgments: {ack_ids}") from error
+                raise HecAckError(f"Failed to query HEC acknowledgments: {ack_ids}") from error
             try:
                 ack_statuses = response.json()["acks"]
                 statuses = [ack_statuses[str(ack_id)] for ack_id in ack_ids]
@@ -276,9 +322,10 @@ class HecForwarder:
                 raise HecAckError("HEC returned an invalid acknowledgment response") from error
             if all(statuses):
                 return
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise HecAckTimeoutError(f"Timed out waiting for acknowledgments: {ack_ids}")
-            time.sleep(self._ack_poll_interval)
+            time.sleep(min(self._ack_poll_interval, remaining))
 
     def _build_hec_event(
         self,
@@ -414,7 +461,7 @@ class BatchHecForwarder(HecForwarder):
         self._pending_count = 0
         self._pending_bytes = 0
         self._worker_error = None
-        self._failed_batch = ()
+        self._failed_events = ()
         self._accepting = True
         self._stop = object()
         self._closed = False
@@ -440,15 +487,12 @@ class BatchHecForwarder(HecForwarder):
         timefmt: Optional[str] = None,
         **kwargs,
     ):
+        queued_events = [
+            self._prepare_queued_event(event, eventtime=eventtime(event), timefmt=timefmt, **kwargs) for event in events
+        ]
         deadline = None if self._enqueue_timeout is None else time.monotonic() + self._enqueue_timeout
         with self._producer_lock:
-            for index, event in enumerate(events):
-                queued_event = self._prepare_queued_event(
-                    event,
-                    eventtime=eventtime(event),
-                    timefmt=timefmt,
-                    **kwargs,
-                )
+            for index, queued_event in enumerate(queued_events):
                 self._enqueue(
                     queued_event,
                     deadline=deadline,
@@ -500,7 +544,7 @@ class BatchHecForwarder(HecForwarder):
         event_limit = min(self._max_batch_bytes, self._max_queue_bytes)
         if event_size > event_limit:
             raise HecEventTooLargeError(event_size, event_limit)
-        return _QueuedEvent(envelope=envelope, payload=payload, size=event_size)
+        return _QueuedEvent(payload=payload, size=event_size)
 
     def flush(self):
         with self._producer_lock:
@@ -544,7 +588,7 @@ class BatchHecForwarder(HecForwarder):
             raise HecWorkerError(
                 "Background HEC batch delivery failed",
                 self._worker_error,
-                tuple(queued_event.envelope for queued_event in self._failed_batch),
+                self._failed_events,
             ) from self._worker_error
 
     def _worker(self):
@@ -592,7 +636,11 @@ class BatchHecForwarder(HecForwarder):
             except Exception as error:
                 with self._capacity:
                     self._worker_error = error
-                    self._failed_batch = tuple(batch)
+                    if isinstance(error, HecBatchError):
+                        failed_batch = batch[error.accepted_count :]
+                    else:
+                        failed_batch = batch
+                    self._failed_events = tuple(json.loads(queued_event.payload) for queued_event in failed_batch)
                     self._capacity.notify_all()
                 return
 
