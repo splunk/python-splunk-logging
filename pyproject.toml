@@ -75,8 +75,14 @@ build_command = """
     uv build
 """
 
+[tool.semantic_release.changelog]
+exclude_commit_patterns = [
+    '''^(?:build|chore|ci|docs|refactor|style|test)(?:\([^)]*?\))?: .+''',
+]
+
 [tool.semantic_release.remote]
 type = "github"
+ignore_token_for_push = true
 
 [tool.semantic_release.publish]
 dist_glob_patterns = ["dist/*"]
