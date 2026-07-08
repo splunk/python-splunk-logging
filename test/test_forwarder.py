@@ -24,6 +24,8 @@ import respx
 
 from splunk_logging.forwarders import HecForwarder
 
+TEST_CHANNEL_ID = "00000000-0000-4000-8000-000000000001"
+
 
 class TestHecForwarder(unittest.TestCase):
     def create_forwarder(self) -> HecForwarder:
@@ -48,20 +50,19 @@ class TestHecForwarder(unittest.TestCase):
 
     @respx.mock
     def test_forward_event_preserves_channel_header_without_ack_polling(self):
-        channel_id = "fe0ecfad-13d5-401b-847d-77833bd77131"
         hec = HecForwarder(
             host="localhost",
             port=8088,
             token="",
             use_ssl=False,
-            channel_id=channel_id,
+            channel_id=TEST_CHANNEL_ID,
         )
         route = respx.post("http://localhost:8088/services/collector/event")
         route.return_value = httpx.Response(200, json={"text": "Success", "code": 0, "ackID": 7})
 
         hec.forward_event({"message": "test"})
 
-        self.assertEqual(route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
+        self.assertEqual(route.calls.last.request.headers["X-Splunk-Request-Channel"], TEST_CHANNEL_ID)
 
     @respx.mock
     def test_forward_events_sends_one_batched_request(self):
@@ -116,14 +117,13 @@ class TestHecForwarder(unittest.TestCase):
 
     @respx.mock
     def test_forward_event_waits_for_indexer_acknowledgment(self):
-        channel_id = "fe0ecfad-13d5-401b-847d-77833bd77131"
         hec = HecForwarder(
             host="localhost",
             port=8088,
             token="",
             use_ssl=False,
             indexer_ack=True,
-            channel_id=channel_id,
+            channel_id=TEST_CHANNEL_ID,
             ack_poll_interval=0,
         )
         event_route = respx.post("http://localhost:8088/services/collector/event")
@@ -133,8 +133,8 @@ class TestHecForwarder(unittest.TestCase):
 
         hec.forward_event({"message": "test"})
 
-        self.assertEqual(event_route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
-        self.assertEqual(ack_route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
+        self.assertEqual(event_route.calls.last.request.headers["X-Splunk-Request-Channel"], TEST_CHANNEL_ID)
+        self.assertEqual(ack_route.calls.last.request.headers["X-Splunk-Request-Channel"], TEST_CHANNEL_ID)
         self.assertEqual(json.loads(ack_route.calls.last.request.content), {"acks": [7]})
 
     @respx.mock
