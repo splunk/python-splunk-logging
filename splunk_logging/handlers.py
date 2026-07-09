@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import socket
-from typing import Optional
 
 from .formatters import JsonFormatter
 from .forwarders import BatchHecForwarder, HecForwarder
@@ -27,17 +26,17 @@ class HecHandler(logging.Handler):
         self,
         host: str = "localhost",
         port: int = 8088,
-        token: Optional[str] = None,
+        token: str | None = None,
         use_ssl: bool = True,
         verify_ssl: bool = True,
-        default_host: Optional[str] = None,
-        default_source: Optional[str] = None,
-        default_sourcetype: Optional[str] = None,
-        default_index: Optional[str] = None,
+        default_host: str | None = None,
+        default_source: str | None = None,
+        default_sourcetype: str | None = None,
+        default_index: str | None = None,
         ignore_exceptions: bool = True,
         *,
         indexer_ack: bool = False,
-        channel_id: Optional[str] = None,
+        channel_id: str | None = None,
         ack_poll_interval: float = 10.0,
         ack_timeout: float = 300.0,
         batch_enabled: bool = False,
@@ -46,7 +45,7 @@ class HecHandler(logging.Handler):
         flush_interval: float = 2.0,
         max_queue_size: int = 10_000,
         max_queue_bytes: int = 10_485_760,
-        enqueue_timeout: Optional[float] = None,
+        enqueue_timeout: float | None = None,
         **kwargs,
     ):
         """

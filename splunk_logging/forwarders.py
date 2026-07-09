@@ -19,9 +19,10 @@ import socket
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional, Union
+from typing import Self
 
 import httpx
 from dateutil.parser import isoparse
@@ -36,13 +37,13 @@ from .exceptions import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _QueuedEvent:
     payload: str
     size: int
 
 
-@dataclass
+@dataclass(slots=True)
 class _FlushRequest:
     completed: bool = False
 
@@ -68,16 +69,16 @@ class HecForwarder:
         self,
         host: str = "localhost",
         port: int = 8088,
-        token: Optional[str] = None,
+        token: str | None = None,
         use_ssl: bool = True,
         verify_ssl: bool = True,
-        default_host: Optional[str] = None,
-        default_source: Optional[str] = None,
-        default_sourcetype: Optional[str] = None,
-        default_index: Optional[str] = None,
+        default_host: str | None = None,
+        default_source: str | None = None,
+        default_sourcetype: str | None = None,
+        default_index: str | None = None,
         *,
         indexer_ack: bool = False,
-        channel_id: Optional[str] = None,
+        channel_id: str | None = None,
         ack_poll_interval: float = 10.0,
         ack_timeout: float = 300.0,
     ):
@@ -133,7 +134,7 @@ class HecForwarder:
         self._client = self._create_client()
         return
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -155,7 +156,7 @@ class HecForwarder:
         method: str,
         path: str,
         *,
-        deadline: Optional[float] = None,
+        deadline: float | None = None,
         **kwargs,
     ) -> httpx.Response:
         retry_attempt = 0
@@ -208,8 +209,8 @@ class HecForwarder:
         self,
         retry_attempt: int,
         *,
-        deadline: Optional[float],
-        retry_after: Optional[str] = None,
+        deadline: float | None,
+        retry_after: str | None = None,
     ):
         try:
             delay = float(retry_after) if retry_after is not None else None
@@ -230,7 +231,7 @@ class HecForwarder:
             raise _RequestDeadlineExceededError
 
     def _timeout_capped_by(self, seconds: float) -> httpx.Timeout:
-        def cap(value: Optional[float]) -> float:
+        def cap(value: float | None) -> float:
             return seconds if value is None else min(value, seconds)
 
         timeout = self._client.timeout
@@ -241,7 +242,7 @@ class HecForwarder:
             pool=cap(timeout.pool),
         )
 
-    def _parse_timestamp(self, timeinfo: Union[str, int, float, datetime], timefmt: Optional[str] = None) -> float:
+    def _parse_timestamp(self, timeinfo: str | int | float | datetime, timefmt: str | None = None) -> float:
         """
         Parses various timestamp formats into a float.
 
@@ -272,8 +273,8 @@ class HecForwarder:
     def forward_event(
         self,
         event: dict,
-        eventtime: Optional[Union[str, int, float, datetime]] = None,
-        timefmt: Optional[str] = None,
+        eventtime: str | int | float | datetime | None = None,
+        timefmt: str | None = None,
         **kwargs,
     ):
         """
@@ -364,8 +365,8 @@ class HecForwarder:
     def _build_hec_event(
         self,
         event: dict,
-        eventtime: Optional[Union[str, int, float, datetime]] = None,
-        timefmt: Optional[str] = None,
+        eventtime: str | int | float | datetime | None = None,
+        timefmt: str | None = None,
         **kwargs,
     ) -> dict:
         eventtime = eventtime or datetime.now()
@@ -393,7 +394,7 @@ class HecForwarder:
         self,
         events: list[dict],
         eventtime: Callable = lambda _: datetime.now(),
-        timefmt: Optional[str] = None,
+        timefmt: str | None = None,
         **kwargs,
     ):
         """
@@ -466,7 +467,7 @@ class BatchHecForwarder(HecForwarder):
         flush_interval: float = 2.0,
         max_queue_size: int = 10_000,
         max_queue_bytes: int = 10_485_760,
-        enqueue_timeout: Optional[float] = None,
+        enqueue_timeout: float | None = None,
         **kwargs,
     ):
         limits = {
@@ -505,8 +506,8 @@ class BatchHecForwarder(HecForwarder):
     def forward_event(
         self,
         event: dict,
-        eventtime: Optional[Union[str, int, float, datetime]] = None,
-        timefmt: Optional[str] = None,
+        eventtime: str | int | float | datetime | None = None,
+        timefmt: str | None = None,
         **kwargs,
     ):
         queued_event = self._prepare_queued_event(event, eventtime=eventtime, timefmt=timefmt, **kwargs)
@@ -518,7 +519,7 @@ class BatchHecForwarder(HecForwarder):
         self,
         events: list[dict],
         eventtime: Callable = lambda _: datetime.now(),
-        timefmt: Optional[str] = None,
+        timefmt: str | None = None,
         **kwargs,
     ):
         queued_events = [
@@ -538,7 +539,7 @@ class BatchHecForwarder(HecForwarder):
         self,
         queued_event: _QueuedEvent,
         *,
-        deadline: Optional[float],
+        deadline: float | None,
         enqueued_count: int,
         next_event_index: int,
     ):
@@ -568,8 +569,8 @@ class BatchHecForwarder(HecForwarder):
     def _prepare_queued_event(
         self,
         event: dict,
-        eventtime: Optional[Union[str, int, float, datetime]] = None,
-        timefmt: Optional[str] = None,
+        eventtime: str | int | float | datetime | None = None,
+        timefmt: str | None = None,
         **kwargs,
     ) -> _QueuedEvent:
         envelope = self._build_hec_event(event, eventtime=eventtime, timefmt=timefmt, **kwargs)

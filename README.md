@@ -9,7 +9,7 @@ splunk instance using the HTTP Event Collector (HEC).
 pip install python-splunk-logging
 ```
 
-Python 3.9 or newer is required.
+Python 3.11 or newer is required.
 
 ## Usage
 
