@@ -72,7 +72,6 @@ inline-quotes = "double"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version", "splunk_logging/__init__.py:__version__"]
-assets = ["uv.lock"]
 commit_parser = "conventional"
 commit_message = "chore(release): update version to {version} [skip ci]"
 build_command = """

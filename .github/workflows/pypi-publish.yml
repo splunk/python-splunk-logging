@@ -70,6 +70,9 @@ jobs:
       - name: Test source distribution
         run: uv run --isolated --no-project --with dist/*.tar.gz -- python -c "import splunk_logging; print(splunk_logging.__version__)"
 
+      - name: Stage release lockfile
+        run: git add -- uv.lock
+
       - name: Semantic Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Provided by GitHub Actions, no need to configure
