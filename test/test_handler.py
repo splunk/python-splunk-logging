@@ -22,6 +22,8 @@ import respx
 from splunk_logging.formatters import JsonFormatter
 from splunk_logging.handlers import HecHandler
 
+TEST_CHANNEL_ID = "00000000-0000-4000-8000-000000000001"
+
 
 class TestHecHandler(unittest.TestCase):
     def create_logger(self):
@@ -51,7 +53,6 @@ class TestHecHandler(unittest.TestCase):
 
     @respx.mock
     def test_hec_logger_supports_indexer_acknowledgment(self):
-        channel_id = "fe0ecfad-13d5-401b-847d-77833bd77131"
         log = logging.Logger("ack")
         handler = HecHandler(
             host="localhost",
@@ -59,7 +60,7 @@ class TestHecHandler(unittest.TestCase):
             token="",
             use_ssl=False,
             indexer_ack=True,
-            channel_id=channel_id,
+            channel_id=TEST_CHANNEL_ID,
             ack_poll_interval=0,
         )
         log.addHandler(handler)
@@ -70,7 +71,7 @@ class TestHecHandler(unittest.TestCase):
 
         log.warning({"message": "test"})
 
-        self.assertEqual(event_route.calls.last.request.headers["X-Splunk-Request-Channel"], channel_id)
+        self.assertEqual(event_route.calls.last.request.headers["X-Splunk-Request-Channel"], TEST_CHANNEL_ID)
         self.assertEqual(ack_route.call_count, 1)
 
     @respx.mock

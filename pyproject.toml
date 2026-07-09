@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "python-splunk-logging"
-version = "1.0.0"
+version = "1.1.0"
 description = "Python logging module for logging json formatted log messages to a HTTP Event Collector (HEC)."
 authors = [
     { name = "Alexander Baker", email = "alexb@splunk.com" },
@@ -79,8 +79,14 @@ build_command = """
     uv build
 """
 
+[tool.semantic_release.changelog]
+exclude_commit_patterns = [
+    '''^(?:build|chore|ci|docs|refactor|style|test)(?:\([^)]*?\))?: .+''',
+]
+
 [tool.semantic_release.remote]
 type = "github"
+ignore_token_for_push = true
 
 [tool.semantic_release.publish]
 dist_glob_patterns = ["dist/*"]
