@@ -4,6 +4,11 @@
 
 ## v1.2.0 (2026-07-09)
 
+### Features
+
+- **python**: Require Python 3.11 or newer
+  ([`8259570`](https://github.com/splunk/python-splunk-logging/commit/8259570e2e5771d83c04ef433546514eb566d62f))
+
 
 ## v1.1.0 (2026-07-09)
 
